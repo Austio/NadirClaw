@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -1072,6 +1072,37 @@ def _build_streaming_response(
 
 
 # ---------------------------------------------------------------------------
+# /dashboard — web UI
+# ---------------------------------------------------------------------------
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Serve the NadirClaw dashboard UI."""
+    from nadirclaw.dashboard import DASHBOARD_HTML
+    return HTMLResponse(content=DASHBOARD_HTML)
+
+
+# ---------------------------------------------------------------------------
+# /v1/report — usage report (JSON)
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/report")
+async def usage_report(
+    since: str = "24h",
+    model: Optional[str] = None,
+    current_user: UserSession = Depends(validate_local_auth),
+) -> Dict[str, Any]:
+    """Generate a usage report from request logs."""
+    from nadirclaw.report import generate_report, load_log_entries, parse_since
+
+    log_path = settings.LOG_DIR / "requests.jsonl"
+    since_dt = parse_since(since)
+    entries = load_log_entries(log_path, since=since_dt, model_filter=model)
+    report = generate_report(entries)
+    return report
+
+
+# ---------------------------------------------------------------------------
 # /v1/logs — view request logs
 # ---------------------------------------------------------------------------
 
@@ -1105,19 +1136,24 @@ async def view_logs(
 async def list_models(
     current_user: UserSession = Depends(validate_local_auth),
 ) -> Dict[str, Any]:
-    models = settings.tier_models
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": m,
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": m.split("/")[0] if "/" in m else "api",
-            }
-            for m in models
-        ],
-    }
+    now = int(time.time())
+    tiers = [
+        ("complex", settings.COMPLEX_MODEL),
+        ("simple", settings.SIMPLE_MODEL),
+        ("free", settings.FREE_MODEL),
+        ("reasoning", settings.REASONING_MODEL),
+    ]
+    data = [
+        {
+            "id": model,
+            "object": "model",
+            "created": now,
+            "owned_by": model.split("/")[0] if "/" in model else "api",
+            "tier": tier,
+        }
+        for tier, model in tiers
+    ]
+    return {"object": "list", "data": data}
 
 
 @app.get("/health")
